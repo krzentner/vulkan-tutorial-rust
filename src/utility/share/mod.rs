@@ -8,17 +8,21 @@ use ash::version::EntryV1_0;
 use ash::version::InstanceV1_0;
 use ash::vk;
 
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::os::raw::c_void;
 use std::path::Path;
 use std::ptr;
 
-
 use crate::utility::constants::*;
 use crate::utility::debug;
 use crate::utility::platforms;
 use crate::utility::structures::*;
+
+pub fn raw_cstr_array(c_strings: &[CString]) -> Vec<*const i8> {
+    c_strings.iter().map(|s| s.as_ptr()).collect()
+}
 
 pub fn create_instance(
     entry: &ash::Entry,
@@ -62,8 +66,7 @@ pub fn create_instance(
     let create_info = vk::InstanceCreateInfo {
         s_type: vk::StructureType::INSTANCE_CREATE_INFO,
         p_next: if VALIDATION.is_enable {
-            &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT
-                as *const c_void
+            &debug_utils_create_info as *const vk::DebugUtilsMessengerCreateInfoEXT as *const c_void
         } else {
             ptr::null()
         },
@@ -115,7 +118,7 @@ pub fn create_surface(
 pub fn pick_physical_device(
     instance: &ash::Instance,
     surface_stuff: &SurfaceStuff,
-    required_device_extensions: &DeviceExtension,
+    required_device_extensions: &[CString],
 ) -> vk::PhysicalDevice {
     let physical_devices = unsafe {
         instance
@@ -131,11 +134,12 @@ pub fn pick_physical_device(
             required_device_extensions,
         );
 
-        // if is_suitable {
-        //     let device_properties = instance.get_physical_device_properties(**physical_device);
-        //     let device_name = super::tools::vk_to_string(&device_properties.device_name);
-        //     println!("Using GPU: {}", device_name);
-        // }
+        //if is_suitable {
+        //let device_properties =
+        //unsafe { instance.get_physical_device_properties(**physical_device) };
+        //let device_name = super::tools::vk_to_string(&device_properties.device_name);
+        //println!("Using GPU: {}", device_name);
+        //}
 
         is_suitable
     });
@@ -150,7 +154,7 @@ pub fn is_physical_device_suitable(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     surface_stuff: &SurfaceStuff,
-    required_device_extensions: &DeviceExtension,
+    required_device_extensions: &[CString],
 ) -> bool {
     let device_features = unsafe { instance.get_physical_device_features(physical_device) };
 
@@ -177,7 +181,7 @@ pub fn create_logical_device(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     validation: &super::debug::ValidationInfo,
-    device_extensions: &DeviceExtension,
+    device_extensions: &[CString],
     surface_stuff: &SurfaceStuff,
 ) -> (ash::Device, QueueFamilyIndices) {
     let indices = find_queue_family(instance, physical_device, surface_stuff);
@@ -216,7 +220,7 @@ pub fn create_logical_device(
         .map(|layer_name| layer_name.as_ptr())
         .collect();
 
-    let enable_extension_names = device_extensions.get_extensions_raw_names();
+    let enable_extension_names = raw_cstr_array(device_extensions);
 
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
@@ -292,7 +296,7 @@ pub fn find_queue_family(
 pub fn check_device_extension_support(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    device_extensions: &DeviceExtension,
+    device_extensions: &[CString],
 ) -> bool {
     let available_extensions = unsafe {
         instance
@@ -310,12 +314,12 @@ pub fn check_device_extension_support(
 
     use std::collections::HashSet;
     let mut required_extensions = HashSet::new();
-    for extension in device_extensions.names.iter() {
-        required_extensions.insert(extension.to_string());
+    for extension in device_extensions.iter() {
+        required_extensions.insert(extension.to_str().expect("Extension name is invalid UTF-8"));
     }
 
     for extension_name in available_extension_names.iter() {
-        required_extensions.remove(extension_name);
+        required_extensions.remove(extension_name.as_str());
     }
 
     return required_extensions.is_empty();
@@ -361,12 +365,11 @@ pub fn create_swapchain(
     let present_mode = choose_swapchain_present_mode(&swapchain_support.present_modes);
     let extent = choose_swapchain_extent(&swapchain_support.capabilities, window);
 
-    let image_count = swapchain_support.capabilities.min_image_count + 1;
-    let image_count = if swapchain_support.capabilities.max_image_count > 0 {
-        image_count.min(swapchain_support.capabilities.max_image_count)
-    } else {
-        image_count
-    };
+    let image_count = 2;
+    if swapchain_support.capabilities.max_image_count == 1 {
+        //image_count = 1;
+        panic!("Does this even work?");
+    }
 
     let (image_sharing_mode, queue_family_index_count, queue_family_indices) =
         if queue_family.graphics_family != queue_family.present_family {
@@ -382,6 +385,17 @@ pub fn create_swapchain(
             (vk::SharingMode::EXCLUSIVE, 0, vec![])
         };
 
+    let mut image_usage = vk::ImageUsageFlags::COLOR_ATTACHMENT;
+    if swapchain_support
+        .capabilities
+        .supported_usage_flags
+        .contains(vk::ImageUsageFlags::TRANSFER_DST)
+    {
+        image_usage |= vk::ImageUsageFlags::TRANSFER_DST;
+    } else {
+        eprintln!("Vulkan swapchain does not support VK_IMAGE_USAGE_TRANSFER_DST_BIT");
+    }
+
     let swapchain_create_info = vk::SwapchainCreateInfoKHR {
         s_type: vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
         p_next: ptr::null(),
@@ -391,7 +405,7 @@ pub fn create_swapchain(
         image_color_space: surface_format.color_space,
         image_format: surface_format.format,
         image_extent: extent,
-        image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        image_usage,
         image_sharing_mode,
         p_queue_family_indices: queue_family_indices.as_ptr(),
         queue_family_index_count,
@@ -428,7 +442,6 @@ pub fn create_swapchain(
 pub fn choose_swapchain_format(
     available_formats: &Vec<vk::SurfaceFormatKHR>,
 ) -> vk::SurfaceFormatKHR {
-
     for available_format in available_formats {
         if available_format.format == vk::Format::B8G8R8A8_SRGB
             && available_format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
@@ -443,13 +456,13 @@ pub fn choose_swapchain_format(
 pub fn choose_swapchain_present_mode(
     available_present_modes: &Vec<vk::PresentModeKHR>,
 ) -> vk::PresentModeKHR {
-    for &available_present_mode in available_present_modes.iter() {
-        if available_present_mode == vk::PresentModeKHR::MAILBOX {
-            return available_present_mode;
-        }
+    if available_present_modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+        vk::PresentModeKHR::IMMEDIATE
+    } else if available_present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+        vk::PresentModeKHR::MAILBOX
+    } else {
+        vk::PresentModeKHR::FIFO
     }
-
-    vk::PresentModeKHR::FIFO
 }
 
 pub fn choose_swapchain_extent(
@@ -461,8 +474,7 @@ pub fn choose_swapchain_extent(
     } else {
         use num::clamp;
 
-        let window_size = window
-            .inner_size();
+        let window_size = window.inner_size();
         println!(
             "\t\tInner Window Size: ({}, {})",
             window_size.width, window_size.height

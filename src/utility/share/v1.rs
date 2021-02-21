@@ -323,7 +323,7 @@ pub fn create_command_pool(
     let command_pool_create_info = vk::CommandPoolCreateInfo {
         s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
         p_next: ptr::null(),
-        flags: vk::CommandPoolCreateFlags::empty(),
+        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
         queue_family_index: queue_families.graphics_family.unwrap(),
     };
 
@@ -571,20 +571,17 @@ pub fn create_index_buffer(
     (index_buffer, index_buffer_memory)
 }
 
-pub fn create_descriptor_pool(
-    device: &ash::Device,
-    swapchain_images_size: usize,
-) -> vk::DescriptorPool {
+pub fn create_descriptor_pool(device: &ash::Device, count: usize) -> vk::DescriptorPool {
     let pool_sizes = [vk::DescriptorPoolSize {
         ty: vk::DescriptorType::UNIFORM_BUFFER,
-        descriptor_count: swapchain_images_size as u32,
+        descriptor_count: count as u32,
     }];
 
     let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo {
         s_type: vk::StructureType::DESCRIPTOR_POOL_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::DescriptorPoolCreateFlags::empty(),
-        max_sets: swapchain_images_size as u32,
+        max_sets: count as u32,
         pool_size_count: pool_sizes.len() as u32,
         p_pool_sizes: pool_sizes.as_ptr(),
     };
@@ -601,10 +598,10 @@ pub fn create_descriptor_sets(
     descriptor_pool: vk::DescriptorPool,
     descriptor_set_layout: vk::DescriptorSetLayout,
     uniforms_buffers: &Vec<vk::Buffer>,
-    swapchain_images_size: usize,
+    count: usize,
 ) -> Vec<vk::DescriptorSet> {
     let mut layouts: Vec<vk::DescriptorSetLayout> = vec![];
-    for _ in 0..swapchain_images_size {
+    for _ in 0..count {
         layouts.push(descriptor_set_layout);
     }
 
@@ -612,7 +609,7 @@ pub fn create_descriptor_sets(
         s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
         p_next: ptr::null(),
         descriptor_pool,
-        descriptor_set_count: swapchain_images_size as u32,
+        descriptor_set_count: count as u32,
         p_set_layouts: layouts.as_ptr(),
     };
 
@@ -677,14 +674,14 @@ pub fn create_descriptor_set_layout(device: &ash::Device) -> vk::DescriptorSetLa
 pub fn create_uniform_buffers(
     device: &ash::Device,
     device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-    swapchain_image_count: usize,
+    n_descriptor_sets: usize,
 ) -> (Vec<vk::Buffer>, Vec<vk::DeviceMemory>) {
     let buffer_size = ::std::mem::size_of::<UniformBufferObject>();
 
     let mut uniform_buffers = vec![];
     let mut uniform_buffers_memory = vec![];
 
-    for _ in 0..swapchain_image_count {
+    for _ in 0..n_descriptor_sets {
         let (uniform_buffer, uniform_buffer_memory) = create_buffer(
             device,
             buffer_size as u64,
